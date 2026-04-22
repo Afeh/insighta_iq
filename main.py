@@ -1,0 +1,73 @@
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+
+from app.config.settings import settings
+from app.routes.profile_routes import router as profiles_router
+
+app = FastAPI(
+	title="Insighta IQ"
+)
+
+app.add_middleware(
+	CORSMiddleware,
+	allow_origins=["*"],
+	allow_methods=["*"],
+	allow_headers=["*"],
+	allow_credentials=True,
+)
+
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+	return JSONResponse(
+		status_code=422,
+		content={"status": "error", "message": "Invalid query parameters"},
+	)
+
+
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+	return JSONResponse(
+		status_code=404,
+		content={"status": "error", "message": "Profile not found"},
+	)
+
+
+@app.exception_handler(500)
+async def server_error_handler(request: Request, exc):
+	return JSONResponse(
+		status_code=500,
+		content={"status": "error", "message": "Internal server error"},
+	)
+
+
+@app.exception_handler(Exception)
+async def http_exception_handler(request: Request, exc):
+	from fastapi import HTTPException
+	if isinstance(exc, HTTPException):
+		if isinstance(exc.detail, dict):
+			return JSONResponse(status_code=exc.status_code, content=exc.detail)
+		return JSONResponse(
+			status_code=exc.status_code,
+			content={"status": "error", "message": str(exc.detail)},
+		)
+	return JSONResponse(
+		status_code=500,
+		content={"status": "error", "message": "Internal server error"},
+	)
+
+
+app.include_router(profiles_router)
+
+
+@app.get("/", tags=["health"])
+def root():
+	return {"status": "success", "message": "Stero API – Intelligence Query Engine v2.0"}
+
+
+@app.get("/health", tags=["health"])
+def health():
+	return {"status": "success", "message": "OK"}
