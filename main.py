@@ -33,7 +33,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def not_found_handler(request: Request, exc):
 	return JSONResponse(
 		status_code=404,
-		content={"status": "error", "message": "Profile not found"},
+		content={"status": "error", "message": "Resource not found"},
 	)
 
 
