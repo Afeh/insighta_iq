@@ -5,6 +5,7 @@ from fastapi.exceptions import RequestValidationError
 
 from app.config.settings import settings
 from app.routes.profile_routes import router as profiles_router
+from app.routes.auth_routes import router as auth_router
 
 app = FastAPI(
 	title="Insighta IQ"
@@ -60,6 +61,7 @@ async def http_exception_handler(request: Request, exc):
 	)
 
 
+app.include_router(auth_router)
 app.include_router(profiles_router)
 
 
