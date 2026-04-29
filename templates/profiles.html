@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Profiles - Insighta Labs+{% endblock %}
+
+{% block content %}
+<div class="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold text-gray-800">Profile Intelligence</h1>
+        {% if user.role == 'admin' %}
+        <button onclick="openCreateModal()" class="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700">Add Profile</button>
+        {% endif %}
+    </div>
+
+    <!-- Filters & Search -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <input type="text" id="searchInput" placeholder="Natural language search..." class="border p-2 rounded col-span-2">
+        <select id="genderFilter" class="border p-2 rounded">
+            <option value="">All Genders</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+        </select>
+        <button onclick="applyFilters()" class="bg-gray-800 text-white p-2 rounded hover:bg-black">Search</button>
+    </div>
+
+    <!-- Table -->
+    <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse" id="profilesTable">
+            <thead>
+                <tr class="bg-gray-100 border-b">
+                    <th class="p-3 text-sm font-semibold">Name</th>
+                    <th class="p-3 text-sm font-semibold">Gender</th>
+                    <th class="p-3 text-sm font-semibold">Age</th>
+                    <th class="p-3 text-sm font-semibold">Country</th>
+                    <th class="p-3 text-sm font-semibold">Action</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                <!-- Data injected via JS -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    <div class="mt-6 flex justify-between items-center" id="pagination">
+        <span class="text-sm text-gray-600" id="recordCount">Showing 0 records</span>
+        <div class="flex space-x-2">
+            <button id="prevBtn" class="px-3 py-1 border rounded disabled:opacity-50">Prev</button>
+            <button id="nextBtn" class="px-3 py-1 border rounded disabled:opacity-50">Next</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentPage = 1;
+
+    async function loadProfiles() {
+        const gender = document.getElementById('genderFilter').value;
+        const q = document.getElementById('searchInput').value;
+        
+        // Use your existing API
+        let url = `/api/profiles?page=${currentPage}&limit=10`;
+        if (gender) url += `&gender=${gender}`;
+        if (q) url = `/api/profiles/search?q=${encodeURIComponent(q)}&page=${currentPage}`;
+
+        const data = await apiFetch(url);
+        if (!data) return;
+
+        const tbody = document.querySelector('#profilesTable tbody');
+        tbody.innerHTML = data.data.map(p => `
+            <tr>
+                <td class="p-3 font-medium">${p.name}</td>
+                <td class="p-3 capitalize">${p.gender}</td>
+                <td class="p-3">${p.age}</td>
+                <td class="p-3">${p.country_name} (${p.country_id})</td>
+                <td class="p-3">
+                    <a href="/web/profiles/${p.id}" class="text-blue-600 hover:underline">View Details</a>
+                </td>
+            </tr>
+        `).join('');
+
+        document.getElementById('recordCount').innerText = `Page ${data.page} of ${data.total_pages} | Total: ${data.total}`;
+        document.getElementById('prevBtn').disabled = !data.links.prev;
+        document.getElementById('nextBtn').disabled = !data.links.next;
+    }
+
+    function applyFilters() { currentPage = 1; loadProfiles(); }
+    document.getElementById('prevBtn').onclick = () => { currentPage--; loadProfiles(); };
+    document.getElementById('nextBtn').onclick = () => { currentPage++; loadProfiles(); };
+
+    // Initial Load
+    loadProfiles();
+</script>
+{% endblock %}
