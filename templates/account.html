@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}My Account - Insighta Labs+{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
+        <!-- Header/Cover -->
+        <div class="h-24 bg-gradient-to-r from-blue-500 to-blue-700"></div>
+        
+        <div class="px-6 pb-6">
+            <div class="relative flex justify-between items-end -mt-12 mb-6">
+                <!-- Avatar -->
+                <img class="w-24 h-24 rounded-full border-4 border-white shadow-md bg-white" 
+                     src="{{ user.avatar_url or 'https://ui-avatars.com/api/?name=' + user.username }}" 
+                     alt="Profile picture">
+                
+                <!-- Badge -->
+                <span class="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider 
+                    {% if user.role == 'admin' %} bg-purple-100 text-purple-700 {% else %} bg-green-100 text-green-700 {% endif %}">
+                    {{ user.role }}
+                </span>
+            </div>
+
+            <!-- User Info -->
+            <div class="space-y-1">
+                <h1 class="text-2xl font-bold text-gray-900">{{ user.username }}</h1>
+                <p class="text-gray-500">{{ user.email }}</p>
+            </div>
+
+            <div class="mt-8 border-t border-gray-100 pt-6">
+                <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">System Identity</h3>
+                <dl class="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2">
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">GitHub ID</dt>
+                        <dd class="mt-1 text-sm text-gray-900 font-mono">{{ user.github_id }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Account Created</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ user.created_at.strftime('%Y-%m-%d') }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Status</dt>
+                        <dd class="mt-1 flex items-center text-sm text-gray-900">
+                            <span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>
+                            Active
+                        </dd>
+                    </div>
+                </dl>
+            </div>
+
+            <!-- Actions Area -->
+            <div class="mt-10 pt-6 border-t border-gray-100 flex flex-col space-y-3">
+                <button onclick="handleLogout()" 
+                        class="w-full flex justify-center items-center py-2 px-4 border border-red-300 rounded-md shadow-sm text-sm font-medium text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition duration-150">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+                    </svg>
+                    Sign Out of Insighta Labs+
+                </button>
+                <p class="text-center text-xs text-gray-400 italic">
+                    Note: Signing out will clear your secure session cookies.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function handleLogout() {
+        if (!confirm("Are you sure you want to sign out?")) return;
+
+        // 1. Call the backend logout API
+        // This should trigger the backend to clear the HTTP-only cookies
+        const response = await fetch('/auth/logout', {
+            method: 'POST',
+            headers: {
+                'X-API-Version': '1',
+                'Content-Type': 'application/json'
+            }
+            // Note: Since cookies are HTTP-only, we don't need to pass tokens manually.
+            // The browser sends the cookie, and the server's Logout logic clears it.
+        });
+
+        // 2. Redirect to Splash page regardless of success
+        // This ensures the user is "logged out" visually.
+        window.location.href = "/";
+    }
+</script>
+{% endblock %}

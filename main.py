@@ -1,11 +1,17 @@
+from fastapi import Depends
 from fastapi import FastAPI, Request
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.exceptions import RequestValidationError
 
 from app.config.settings import settings
 from app.routes.profile_routes import router as profiles_router
+from app.models.user_models import User
+from app.middlewares.auth_middleware import get_current_user
 from app.routes.auth_routes import router as auth_router
+from app.routes.web_routes import router as web_router
 from app.middlewares.rate_limit import rate_limit_middleware
 from app.middlewares.logging import logging_middleware
 
@@ -23,6 +29,9 @@ app.add_middleware(
 	allow_credentials=True,
 )
 
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+templates = Jinja2Templates(directory="templates")
 
 app.middleware("http")(rate_limit_middleware)
 
@@ -80,6 +89,7 @@ async def http_exception_handler(request: Request, exc):
 
 app.include_router(auth_router)
 app.include_router(profiles_router)
+app.include_router(web_router)
 
 
 @app.get("/", tags=["health"])
@@ -90,3 +100,13 @@ def root():
 @app.get("/health", tags=["health"])
 def health():
 	return {"status": "success", "message": "OK"}
+
+@app.get("/login", response_class=HTMLResponse)
+async def serve_login_page(request: Request):
+    return templates.TemplateResponse(request=request, name="login.html")
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def serve_dashboard(request: Request, user: User = Depends(get_current_user)):
+    # The 'user' object from your auth middleware is now available!
+    # We pass it to the template so it can display "Welcome, {{ user.username }}!"
+    return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
