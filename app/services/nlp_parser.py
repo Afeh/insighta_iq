@@ -22,12 +22,12 @@ COUNTRY_MAP: dict[str, str] = {
 	# Americas
 	"usa": "US", "united states": "US", "america": "US", "canada": "CA",
 	"mexico": "MX", "brazil": "BR", "argentina": "AR", "colombia": "CO",
-	"chile": "CL", "peru": "PE", "venezuela": "VE", "ecuador": "EC",
+	"chile": "CL", "peru": "PE", "venezuela": "VE", "ecuador": "EC", "jamaica":"JM",
 	# Europe
 	"uk": "GB", "united kingdom": "GB", "england": "GB", "france": "FR",
 	"germany": "DE", "spain": "ES", "italy": "IT", "portugal": "PT",
 	"netherlands": "NL", "belgium": "BE", "sweden": "SE", "norway": "NO",
-	"denmark": "DK", "finland": "FI", "poland": "PL", "russia": "RU",
+	"denmark": "DK", "finland": "FI", "poland": "PL", "russia": "RU", "romania": "RO",
 	# Asia
 	"china": "CN", "india": "IN", "japan": "JP", "south korea": "KR",
 	"indonesia": "ID", "pakistan": "PK", "bangladesh": "BD", "philippines": "PH",

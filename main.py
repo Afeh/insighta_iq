@@ -9,6 +9,8 @@ from app.routes.auth_routes import router as auth_router
 from app.middlewares.rate_limit import rate_limit_middleware
 from app.middlewares.logging import logging_middleware
 
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 app = FastAPI(
 	title="Insighta IQ"
 )
@@ -50,6 +52,15 @@ async def server_error_handler(request: Request, exc):
 		content={"status": "error", "message": "Internal server error"},
 	)
 
+@app.exception_handler(StarletteHTTPException)
+async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
+	if isinstance(exc.detail, dict):
+		return JSONResponse(status_code=exc.status_code, content=exc.detail)
+	
+	return JSONResponse(
+		status_code=exc.status_code,
+		content={"status": "error", "message": str(exc.detail)},
+	)
 
 @app.exception_handler(Exception)
 async def http_exception_handler(request: Request, exc):

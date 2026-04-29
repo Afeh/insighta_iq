@@ -18,6 +18,10 @@ class Settings(BaseSettings):
 
 	WEB_ORIGIN: str = "http://localhost:8000"
 
+	GENDERIZE_API_URL: str = "https://api.genderize.io"
+	AGIFY_API_URL: str = "https://api.agify.io"
+	NATIONALIZE_API_URL: str = "https://api.nationalize.io"
+
 	class Config:
 		env_file = ".env"
 
