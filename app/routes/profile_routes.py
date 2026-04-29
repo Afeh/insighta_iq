@@ -1,23 +1,41 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+import csv
+from datetime import datetime
+import io
+import math
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import Optional
 
 from app.db.database import get_db
 from app.schemas.profile_schema import PaginatedProfilesResponse, ProfileOut, ErrorResponse
 from app.services.profiles_services import get_profiles, search_profiles_nlp, QueryValidationError
+from app.middlewares.versioning import require_api_version
 
-router = APIRouter(prefix="/api/profiles", tags=["profiles"])
+router = APIRouter(prefix="/api/profiles", tags=["profiles"], dependencies=[Depends(require_api_version)])
 
 
-def _paginated_response(total: int, page: int, limit: int, results) -> dict:
+def _paginated_response(request: Request, total: int, page: int, limit: int, results) -> dict:
+	total_pages = math.ceil(total / limit) if limit > 0 else 0
+	
+	def get_page_url(p: int):
+		if p < 1 or p > total_pages:
+			return None
+		return str(request.url.include_query_params(page=p, limit=limit))
+
 	return {
 		"status": "success",
 		"page": page,
 		"limit": limit,
 		"total": total,
+		"total_pages": total_pages,
+		"links": {
+			"self": str(request.url.include_query_params(page=page, limit=limit)),
+			"next": get_page_url(page + 1) if page < total_pages else None,
+			"prev": get_page_url(page - 1) if page > 1 else None
+		},
 		"data": results,
 	}
-
 
 @router.get("/search")
 def search_profiles(
@@ -92,3 +110,4 @@ def list_profiles(
 		)
 
 	return _paginated_response(total, page, limit, profiles)
+
