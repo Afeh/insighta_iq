@@ -6,6 +6,8 @@ from fastapi.exceptions import RequestValidationError
 from app.config.settings import settings
 from app.routes.profile_routes import router as profiles_router
 from app.routes.auth_routes import router as auth_router
+from app.middlewares.rate_limit import rate_limit_middleware
+from app.middlewares.logging import logging_middleware
 
 app = FastAPI(
 	title="Insighta IQ"
@@ -19,6 +21,10 @@ app.add_middleware(
 	allow_credentials=True,
 )
 
+
+app.middleware("http")(rate_limit_middleware)
+
+app.middleware("http")(logging_middleware)
 
 
 @app.exception_handler(RequestValidationError)
