@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 	ACCESS_TOKEN_EXPIRE_MINUTES: int
 	REFRESH_TOKEN_EXPIRE_MINUTES: int
 
-	WEB_ORIGIN: str = "http://localhost:8000"
+	WEB_ORIGIN: str
 
 	GENDERIZE_API_URL: str = "https://api.genderize.io"
 	AGIFY_API_URL: str = "https://api.agify.io"
