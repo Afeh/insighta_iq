@@ -111,3 +111,58 @@ def list_profiles(
 
 	return _paginated_response(total, page, limit, profiles)
 
+
+@router.get("/export")
+def export_profiles(
+	# Use the same filters as list_profiles
+	gender: Optional[str] = Query(None),
+	age_group: Optional[str] = Query(None),
+	country_id: Optional[str] = Query(None),
+	min_age: Optional[int] = Query(None, ge=0),
+	max_age: Optional[int] = Query(None, ge=0),
+	min_gender_probability: Optional[float] = Query(None, ge=0.0, le=1.0),
+	min_country_probability: Optional[float] = Query(None, ge=0.0, le=1.0),
+	sort_by: Optional[str] = Query(None),
+	order: Optional[str] = Query("asc"),
+	format: str = Query(..., description="Must be csv"),
+	db: Session = Depends(get_db),
+):
+	if format.lower() != "csv":
+		raise HTTPException(
+			status_code=400, 
+			detail={"status": "error", "message": "Only CSV format is supported"}
+		)
+
+	try:
+		_, profiles = get_profiles(
+			db, gender, age_group, country_id, min_age, max_age, 
+			min_gender_probability, min_country_probability, 
+			sort_by, order, page=1, limit=10000 
+		)
+	except QueryValidationError as e:
+		raise HTTPException(status_code=e.status_code, detail={"status": "error", "message": e.message})
+
+	# Create CSV in memory
+	output = io.StringIO()
+	writer = csv.writer(output)
+	
+	writer.writerow([
+		"id", "name", "gender", "gender_probability", "age", 
+		"age_group", "country_id", "country_name", "country_probability", "created_at"
+	])
+	
+	# Write Rows
+	for p in profiles:
+		writer.writerow([
+			p.id, p.name, p.gender, p.gender_probability, p.age, 
+			p.age_group, p.country_id, p.country_name, p.country_probability, p.created_at
+		])
+
+	output.seek(0)
+	timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+	
+	return StreamingResponse(
+		iter([output.getvalue()]),
+		media_type="text/csv",
+		headers={"Content-Disposition": f'attachment; filename="profiles_{timestamp}.csv"'}
+	)
