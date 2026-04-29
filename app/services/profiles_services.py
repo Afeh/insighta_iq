@@ -1,9 +1,17 @@
+import httpx
+import asyncio
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, desc, func
 from typing import Optional, Tuple, List
+from uuid_extensions import uuid7str
 
 from app.models.profile_models import Profile
-from app.services.nlp_parser import parse_natural_query, ParsedQuery
+from app.config.settings import settings
+from app.utils.round_up import round_up
+from app.services.nlp_parser import parse_natural_query, ParsedQuery, COUNTRY_MAP
+
+REVERSE_COUNTRY_MAP = {code: name.title() for name, code in COUNTRY_MAP.items()}
 
 VALID_SORT_FIELDS = {"age", "created_at", "gender_probability"}
 VALID_ORDERS = {"asc", "desc"}
@@ -133,3 +141,117 @@ def search_profiles_nlp(
 	query = query.order_by(asc(Profile.created_at))
 	total, results = _apply_pagination(query, page, limit)
 	return total, results
+
+
+async def fetch_gender(name: str):
+	async with httpx.AsyncClient() as client:
+		res = await client.get(
+			settings.GENDERIZE_API_URL,
+			params={"name": name}
+		)
+
+	if res.status_code != 200:
+		raise ValueError("Genderize")
+
+	data = res.json()
+
+	if data.get("gender") is None or data.get("count") == 0:
+		raise ValueError("Genderize")
+	
+	return {
+		"gender": data["gender"],
+		"probability": data["probability"],
+		"count": data["count"]
+	}
+
+
+async def fetch_age(name: str):
+	async with httpx.AsyncClient() as client:
+		res = await client.get(
+			settings.AGIFY_API_URL,
+			params={"name": name}
+		)
+
+	if res.status_code != 200:
+		raise ValueError("Agify")
+
+	data = res.json()
+
+	if data.get("age") is None:
+		raise ValueError("Agify")
+
+	return {
+		"age": data["age"]
+	}
+
+
+async def fetch_country(name: str):
+	async with httpx.AsyncClient() as client:
+		res = await client.get(
+			settings.NATIONALIZE_API_URL,
+			params={"name": name}
+		)
+	if res.status_code != 200:
+		raise ValueError("Nationalize")
+
+	data = res.json()
+
+	countries = data.get("country", [])
+	if not countries:
+		raise ValueError("Nationalize")
+
+	return countries
+
+
+async def create_profile_from_external_apis(db: Session, name: str) -> Profile:
+	existing_profile = db.query(Profile).filter(func.lower(Profile.name) == name.lower()).first()
+
+	if existing_profile:
+		return existing_profile, False
+
+	try:
+		gender_data, age_data, country_data = await asyncio.gather(
+			fetch_gender(name),
+			fetch_age(name),
+			fetch_country(name)
+		)
+	except ValueError as e:
+		raise ValueError(str(e))
+
+	# 3. Process age group
+	age = age_data["age"]
+
+	if age <= 12:
+		age_group = "child"
+	elif age <= 19:
+		age_group = "teenager"
+	elif age <= 59:
+		age_group = "adult"
+	else:
+		age_group = "senior"
+
+	# 4. Pick best country (highest probability)
+	best_country = max(country_data, key=lambda x: x["probability"])
+
+	new_profile = Profile(
+		id=uuid7str(),
+		name=name,
+		gender=gender_data["gender"],
+		gender_probability=gender_data["probability"],
+		age=age,
+		age_group=age_group,
+		country_id=best_country["country_id"],
+		country_name=REVERSE_COUNTRY_MAP[best_country["country_id"]],
+		country_probability=round_up(best_country["probability"]),
+		created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+	)
+
+	db.add(new_profile)
+	db.commit()
+	db.refresh(new_profile)
+
+	return new_profile, True
+
+
+def get_profile_by_id(db: Session, id: str):
+	return db.query(Profile).filter(Profile.id == id).first()
