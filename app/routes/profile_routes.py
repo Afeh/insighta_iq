@@ -5,8 +5,9 @@ from typing import Optional
 from app.db.database import get_db
 from app.schemas.profile_schema import PaginatedProfilesResponse, ProfileOut, ErrorResponse
 from app.services.profiles_services import get_profiles, search_profiles_nlp, QueryValidationError
+from app.middlewares.versioning import require_api_version
 
-router = APIRouter(prefix="/api/profiles", tags=["profiles"])
+router = APIRouter(prefix="/api/profiles", tags=["profiles"], dependencies=[Depends(require_api_version)])
 
 
 def _paginated_response(total: int, page: int, limit: int, results) -> dict:
