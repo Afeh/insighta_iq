@@ -29,3 +29,6 @@ class PaginatedProfilesResponse(BaseModel):
 class ErrorResponse(BaseModel):
 	status: str = "error"
 	message: str
+
+class CreateProfileRequest(BaseModel):
+	name: str
