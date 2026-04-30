@@ -11,6 +11,7 @@ def get_my_profile(current_user: User = Depends(get_current_user)):
 		"status": "success",
 		"data": {
 			"id": current_user.id,
+			"github_id": current_user.github_id,
 			"username": current_user.username,
 			"email": current_user.email,
 			"avatar_url": current_user.avatar_url,
