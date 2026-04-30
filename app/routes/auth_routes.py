@@ -109,12 +109,14 @@ async def github_callback(
 	# 3. Retrieve the EXACT redirect_uri saved in step 1
 	actual_redirect_uri = request.cookies.get("oauth_redirect_uri") or settings.GITHUB_REDIRECT_URI
 
+	code_verifier = request.cookies.get("oauth_verifier")
+
 	try:
 		user, access_token, refresh_token = await handle_oauth_callback(
 			db=db,
 			code=code,
 			redirect_uri=actual_redirect_uri,
-			code_verifier=None,
+			code_verifier=code_verifier,
 			is_cli=False
 		)
 	except Exception as e:
