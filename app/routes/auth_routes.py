@@ -15,16 +15,16 @@ from app.models.user_models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# In-memory state store (replace with Redis in production)
-_pending_states: dict[str, dict] = {}
+# # In-memory state store (replace with Redis in production)
+# _pending_states: dict[str, dict] = {}
 
 
-def _store_state(state: str, data: dict):
-	_pending_states[state] = data
+# def _store_state(state: str, data: dict):
+# 	_pending_states[state] = data
 
 
-def _consume_state(state: str) -> Optional[dict]:
-	return _pending_states.pop(state, None)
+# def _consume_state(state: str) -> Optional[dict]:
+# 	return _pending_states.pop(state, None)
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ def _consume_state(state: str) -> Optional[dict]:
 
 @router.get("/github")
 def github_login(
-	request: Request,
+	response: Response,  # Added response to set cookies
 	code_challenge: Optional[str] = Query(None),
 	redirect_uri: Optional[str] = Query(None),
 ):
@@ -42,17 +42,28 @@ def github_login(
 	Supports optional PKCE code_challenge (required for CLI flow).
 	"""
 	state = secrets.token_urlsafe(32)
-	_store_state(state, {
-		"code_challenge": code_challenge,
-		"redirect_uri": redirect_uri,
-		"source": "cli" if code_challenge else "browser",
-	})
+	
 	url = build_github_auth_url(
 		state=state,
 		code_challenge=code_challenge,
 		redirect_uri=redirect_uri or settings.GITHUB_REDIRECT_URI,
 	)
-	return RedirectResponse(url)
+	
+	resp = RedirectResponse(url)
+
+	# If it's the Browser flow (no code_challenge), save the state in a secure cookie.
+	# We use samesite="none" and secure=True so it survives cross-domain (Leapcell to Backend)
+	if not code_challenge:
+		resp.set_cookie(
+			key="oauth_state",
+			value=state,
+			httponly=True,
+			secure=True,
+			samesite="none",
+			max_age=300  # 5 minutes
+		)
+
+	return resp
 
 
 @router.get("/github/callback")
@@ -64,14 +75,10 @@ async def github_callback(
 	db: Session = Depends(get_db),
 ):
 	"""
-	Handles GitHub OAuth callback.
-	- CLI flow: returns JSON tokens
-	- Browser flow: sets HTTP-only cookies and redirects to web portal
+	Handles GitHub OAuth callback for the Web Portal.
 	"""
 	if code == "test_code":
-		# 1. Find your seeded Admin user
 		admin_user = db.query(User).filter(User.role == "admin").first()
-		
 		if not admin_user:
 			raise HTTPException(status_code=404, detail="Admin user not seeded in DB")
 
@@ -84,22 +91,23 @@ async def github_callback(
 			"status": "success"
 		}
 	
-	state_data = _consume_state(state)
-	if not state_data:
+	# Read the state from the cookie instead of the in-memory dictionary!
+	saved_state = request.cookies.get("oauth_state")
+	
+	if not saved_state or saved_state != state:
 		raise HTTPException(
 			status_code=400,
 			detail={"status": "error", "message": "Invalid or expired OAuth state"},
 		)
 
-	code_verifier = request.query_params.get("code_verifier")  # CLI passes this
-	redirect_uri = state_data.get("redirect_uri") or settings.GITHUB_REDIRECT_URI
+	redirect_uri = settings.GITHUB_REDIRECT_URI
 
 	try:
 		user, access_token, refresh_token = await handle_oauth_callback(
 			db=db,
 			code=code,
 			redirect_uri=redirect_uri,
-			code_verifier=code_verifier,
+			code_verifier=None, # Browser flow doesn't use PKCE
 		)
 	except Exception as e:
 		raise HTTPException(
@@ -107,24 +115,13 @@ async def github_callback(
 			detail={"status": "error", "message": f"GitHub OAuth failed: {str(e)}"},
 		)
 
-	source = state_data.get("source", "browser")
-
-	if source == "cli":
-		# CLI expects JSON
-		return {
-			"status": "success",
-			"access_token": access_token,
-			"refresh_token": refresh_token,
-			"user": {
-				"id": user.id,
-				"username": user.username,
-				"role": user.role,
-			},
-		}
-
-	# # Browser flow: set HTTP-only cookies, redirect to portal
+	# Browser flow: set HTTP-only cookies, redirect to portal
 	web_origin = settings.WEB_ORIGIN
 	resp = RedirectResponse(url=f"{web_origin}/dashboard.html", status_code=302)
+	
+	# Delete the temporary state cookie
+	resp.delete_cookie("oauth_state", httponly=True, secure=True, samesite="none")
+
 	resp.set_cookie(
 		"access_token", access_token,
 		httponly=True, secure=True, samesite="none",
