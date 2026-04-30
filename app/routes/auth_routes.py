@@ -50,6 +50,7 @@ def github_login(
 		state=state,
 		code_challenge=code_challenge,
 		redirect_uri=redirect_uri or settings.GITHUB_REDIRECT_URI,
+		is_cli=False
 	)
 	
 	resp = RedirectResponse(url)

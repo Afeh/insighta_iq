@@ -47,9 +47,9 @@ def build_github_auth_url(
 	state: str,
 	code_challenge: Optional[str] = None,
 	redirect_uri: Optional[str] = None,
+	is_cli: bool = False
 
 ) -> str:
-	is_cli = code_challenge is not None
 
 	client_id = (
 		settings.GITHUB_CLIENT_ID_CLI
