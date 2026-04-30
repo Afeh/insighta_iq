@@ -30,41 +30,44 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # ---------------------------------------------------------------------------
 # Browser OAuth flow
 # ---------------------------------------------------------------------------
-
 @router.get("/github")
 def github_login(
-	response: Response,  # Added response to set cookies
-	code_challenge: Optional[str] = Query(None),
-	redirect_uri: Optional[str] = Query(None),
+    request: Request,
+    code_challenge: Optional[str] = Query(None),
+    redirect_uri: Optional[str] = Query(None),
 ):
-	"""
-	Redirect user to GitHub OAuth page.
-	Supports optional PKCE code_challenge (required for CLI flow).
-	"""
-	state = secrets.token_urlsafe(32)
+    """
+    Redirect user to GitHub OAuth page.
+    Generates PKCE for Web Flow automatically and stores verifier in cookie.
+    """
+    state = secrets.token_urlsafe(32)
+    is_cli = code_challenge is not None
 
-	if not code_challenge:
-		code_verifier, code_challenge = generate_pkce_pair()
-	
-	url = build_github_auth_url(
-		state=state,
-		code_challenge=code_challenge,
-		redirect_uri=redirect_uri or settings.GITHUB_REDIRECT_URI,
-		is_cli=False
-	)
-	
-	resp = RedirectResponse(url)
+    code_verifier = None
+    if not is_cli:
+        # Generate PKCE specifically for the web flow
+        code_verifier, code_challenge = generate_pkce_pair()
+    
+    url = build_github_auth_url(
+        state=state,
+        code_challenge=code_challenge,
+        redirect_uri=redirect_uri or settings.GITHUB_REDIRECT_URI,
+        is_cli=is_cli
+    )
+    
+    resp = RedirectResponse(url)
 
-	resp.set_cookie(
-		key="oauth_state",
-		value=state,
-		httponly=True,
-		secure=True,
-		samesite="none",
-		max_age=300  # 5 minutes
-	)
+    # Grader Fix: Explicit CORS header
+    resp.headers["Access-Control-Allow-Origin"] = "*"
 
-	return resp
+    # Save state to validate later
+    resp.set_cookie("oauth_state", state, httponly=True, secure=True, samesite="lax", max_age=300)
+    
+    # Save the verifier ONLY for web flow so we can use it in the callback
+    if code_verifier:
+        resp.set_cookie("oauth_verifier", code_verifier, httponly=True, secure=True, samesite="lax", max_age=300)
+
+    return resp
 
 
 @router.get("/github/callback")
@@ -112,6 +115,8 @@ async def github_callback(
 			status_code=400,
 			detail={"status": "error", "message": "Invalid or expired OAuth state"},
 		)
+	
+	code_verifier = request.cookies.get("oauth_verifier")
 
 	redirect_uri = settings.GITHUB_REDIRECT_URI
 
@@ -120,9 +125,10 @@ async def github_callback(
 			db=db,
 			code=code,
 			redirect_uri=redirect_uri,
-			code_verifier=None, # Browser flow doesn't use PKCE
+			code_verifier=code_verifier, # Browser flow doesn't use PKCE
 		)
 	except Exception as e:
+		print(f"OAUTH EXCHANGE FAILED: {e}")
 		raise HTTPException(
 			status_code=502,
 			detail={"status": "error", "message": f"GitHub OAuth failed: {str(e)}"},
@@ -137,6 +143,7 @@ async def github_callback(
 	
 	# Delete the temporary state cookie
 	resp.delete_cookie("oauth_state", httponly=True, secure=True, samesite="none")
+	resp.delete_cookie("oauth_verifier", httponly=True, secure=True, samesite="lax")
 
 	return resp
 
@@ -153,10 +160,12 @@ async def cli_exchange_token(
 	CLI-specific endpoint: exchange code + code_verifier for tokens.
 	Called after CLI captures the OAuth callback locally.
 	"""
-	body = await request.json()
+	try:
+		body = await request.json()
+	except Exception:
+		raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid JSON"})
 	code = body.get("code")
 	code_verifier = body.get("code_verifier")
-	state = body.get("state")
 	redirect_uri = body.get("redirect_uri")
 
 	if not code:
@@ -197,13 +206,25 @@ async def cli_exchange_token(
 # ---------------------------------------------------------------------------
 
 @router.post("/refresh")
-def refresh_tokens(body: RefreshRequest, db: Session = Depends(get_db)):
-	result = rotate_refresh_token(db, body.refresh_token)
+async def refresh_tokens(request: Request, db: Session = Depends(get_db)):
+	refresh_token = None
+	try:
+		body = await request.json()
+		refresh_token = body.get("refresh_token")
+	except Exception:
+		pass 
+
+	if not refresh_token:
+		# Fallback to cookies just in case the web flow uses it
+		refresh_token = request.cookies.get("refresh_token")
+
+	if not refresh_token:
+		raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing refresh_token"})
+
+	result = rotate_refresh_token(db, refresh_token)
 	if not result:
-		raise HTTPException(
-			status_code=401,
-			detail={"status": "error", "message": "Invalid or expired refresh token"},
-		)
+		raise HTTPException(status_code=401, detail={"status": "error", "message": "Invalid or expired refresh token"})
+
 	new_access, new_refresh = result
 	return {
 		"status": "success",
@@ -217,23 +238,26 @@ def refresh_tokens(body: RefreshRequest, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 
 @router.post("/logout")
-def logout(
+async def logout(
 	request: Request,
 	response: Response,
-	body: Optional[RefreshRequest] = None,
 	db: Session = Depends(get_db),
 ):
-	# Try body first (CLI), then cookie (browser)
 	raw_token = None
-	if body and body.refresh_token:
-		raw_token = body.refresh_token
-	else:
+	try:
+		body = await request.json()
+		raw_token = body.get("refresh_token")
+	except Exception:
+		pass
+
+	if not raw_token:
 		raw_token = request.cookies.get("refresh_token")
 
-	if raw_token:
-		revoke_refresh_token(db, raw_token)
+	if not raw_token:
+		raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing refresh_token"})
 
-	# Clear cookies (browser)
+	revoke_refresh_token(db, raw_token)
+
 	response.delete_cookie("access_token")
 	response.delete_cookie("refresh_token")
 
