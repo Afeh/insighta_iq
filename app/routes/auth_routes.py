@@ -124,15 +124,15 @@ async def github_callback(
 
 	# # Browser flow: set HTTP-only cookies, redirect to portal
 	web_origin = settings.WEB_ORIGIN
-	resp = RedirectResponse(url=f"{web_origin}/dashboard", status_code=302)
+	resp = RedirectResponse(url=f"{web_origin}/dashboard.html", status_code=302)
 	resp.set_cookie(
 		"access_token", access_token,
-		httponly=True, secure=False, samesite="lax",
+		httponly=True, secure=True, samesite="none",
 		max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
 	)
 	resp.set_cookie(
 		"refresh_token", refresh_token,
-		httponly=True, secure=False, samesite="lax",
+		httponly=True, secure=True, samesite="none",
 		max_age=settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60,
 	)
 
