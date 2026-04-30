@@ -117,7 +117,10 @@ async def github_callback(
 
 	# Browser flow: set HTTP-only cookies, redirect to portal
 	web_origin = settings.WEB_ORIGIN
-	resp = RedirectResponse(url=f"{web_origin}/dashboard.html", status_code=302)
+	resp = RedirectResponse(
+			url=f"{web_origin}/auth-callback.html?access_token={access_token}&refresh_token={refresh_token}",
+			status_code=302
+		)
 	
 	# Delete the temporary state cookie
 	resp.delete_cookie("oauth_state", httponly=True, secure=True, samesite="none")
@@ -245,3 +248,27 @@ def whoami(current_user: User = Depends(get_current_user)):
 		"status": "success",
 		"data": current_user
 	}
+
+
+@router.get("/session")
+async def set_session_cookies(
+	response: Response,
+	access_token: str = Query(...),
+	refresh_token: str = Query(...),
+):
+	"""
+	Called by frontend after OAuth redirect to set HTTP-only cookies 
+	from a same-origin fetch (with credentials: include).
+	Tokens in URL are short-lived and only used once.
+	"""
+	response.set_cookie(
+		"access_token", access_token,
+		httponly=True, secure=True, samesite="none",
+		max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+	)
+	response.set_cookie(
+		"refresh_token", refresh_token,
+		httponly=True, secure=True, samesite="none",
+		max_age=settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60,
+	)
+	return {"status": "success"}
