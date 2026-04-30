@@ -23,15 +23,13 @@ app = FastAPI(
 
 app.add_middleware(
 	CORSMiddleware,
-	allow_origins=["*"],
+	allow_origins=[settings.WEB_ORIGIN],
 	allow_methods=["*"],
 	allow_headers=["*"],
 	allow_credentials=True,
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-templates = Jinja2Templates(directory="templates")
 
 app.middleware("http")(rate_limit_middleware)
 
@@ -89,7 +87,6 @@ async def http_exception_handler(request: Request, exc):
 
 app.include_router(auth_router)
 app.include_router(profiles_router)
-app.include_router(web_router)
 
 
 @app.get("/", tags=["health"])
@@ -101,12 +98,3 @@ def root():
 def health():
 	return {"status": "success", "message": "OK"}
 
-@app.get("/login", response_class=HTMLResponse)
-async def serve_login_page(request: Request):
-    return templates.TemplateResponse(request=request, name="login.html")
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def serve_dashboard(request: Request, user: User = Depends(get_current_user)):
-    # The 'user' object from your auth middleware is now available!
-    # We pass it to the template so it can display "Welcome, {{ user.username }}!"
-    return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
