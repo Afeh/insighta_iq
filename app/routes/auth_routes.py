@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.config.settings import settings
 from app.db.database import get_db
 from app.schemas.user_schema import TokenResponse, RefreshRequest, UserResponse
-from app.services.auth_services import build_github_auth_url, handle_oauth_callback
+from app.services.auth_services import build_github_auth_url, handle_oauth_callback, generate_pkce_pair
 from app.middlewares.auth_middleware import get_current_user
 from app.utils.tokens import rotate_refresh_token, revoke_refresh_token, create_access_token, create_refresh_token
 from app.models.user_models import User
@@ -42,6 +42,9 @@ def github_login(
 	Supports optional PKCE code_challenge (required for CLI flow).
 	"""
 	state = secrets.token_urlsafe(32)
+
+	if not code_challenge:
+		code_verifier, code_challenge = generate_pkce_pair()
 	
 	url = build_github_auth_url(
 		state=state,
@@ -51,17 +54,14 @@ def github_login(
 	
 	resp = RedirectResponse(url)
 
-	# If it's the Browser flow (no code_challenge), save the state in a secure cookie.
-	# We use samesite="none" and secure=True so it survives cross-domain (Leapcell to Backend)
-	if not code_challenge:
-		resp.set_cookie(
-			key="oauth_state",
-			value=state,
-			httponly=True,
-			secure=True,
-			samesite="none",
-			max_age=300  # 5 minutes
-		)
+	resp.set_cookie(
+		key="oauth_state",
+		value=state,
+		httponly=True,
+		secure=True,
+		samesite="none",
+		max_age=300  # 5 minutes
+	)
 
 	return resp
 
@@ -73,10 +73,16 @@ async def github_callback(
 	code: str = Query(...),
 	state: str = Query(...),
 	db: Session = Depends(get_db),
+	code_verifier: Optional[str] = Query(None),
 ):
 	"""
 	Handles GitHub OAuth callback for the Web Portal.
 	"""
+	if not code:
+		raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing 'code' parameter"})
+	if not state:
+		raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing 'state' parameter"})
+
 	if code == "test_code":
 		admin_user = db.query(User).filter(User.role == "admin").first()
 		if not admin_user:
@@ -88,12 +94,18 @@ async def github_callback(
 		return {
 			"access_token": access_token,
 			"refresh_token": refresh_token,
+			"token_type": "bearer",
+			"user": {
+				"id": admin_user.id,
+				"username": admin_user.username,
+				"email": admin_user.email,
+				"role": admin_user.role,
+			},
 			"status": "success"
 		}
-	
-	# Read the state from the cookie instead of the in-memory dictionary!
+
+	# Normal flow — state validation
 	saved_state = request.cookies.get("oauth_state")
-	
 	if not saved_state or saved_state != state:
 		raise HTTPException(
 			status_code=400,
