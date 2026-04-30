@@ -125,17 +125,6 @@ async def github_callback(
 	# Delete the temporary state cookie
 	resp.delete_cookie("oauth_state", httponly=True, secure=True, samesite="none")
 
-	resp.set_cookie(
-		"access_token", access_token,
-		httponly=True, secure=True, samesite="none",
-		max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-	)
-	resp.set_cookie(
-		"refresh_token", refresh_token,
-		httponly=True, secure=True, samesite="none",
-		max_age=settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60,
-	)
-
 	return resp
 
 # ---------------------------------------------------------------------------
