@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.config.settings import settings
 from app.db.database import get_db
 from app.schemas.user_schema import UserResponse
-from app.services.auth_services import build_github_auth_url, handle_oauth_callback
+from app.services.auth_services import build_github_auth_url, handle_oauth_callback, generate_pkce_pair
 from app.middlewares.auth_middleware import get_current_user
 from app.utils.tokens import rotate_refresh_token, revoke_refresh_token, create_access_token, create_refresh_token
 from app.models.user_models import User
@@ -33,6 +33,12 @@ def github_login(
 
 	# 1. Capture the EXACT redirect_uri requested (Crucial for the grader)
 	actual_redirect_uri = redirect_uri or settings.GITHUB_REDIRECT_URI
+	code_verifier = None
+
+	if not is_cli:
+		code_verifier, code_challenge = generate_pkce_pair()
+
+
 	
 	url = build_github_auth_url(
 		state=state,
@@ -47,8 +53,11 @@ def github_login(
 	resp.headers["Access-Control-Allow-Origin"] = "*"
 
 	# 2. Save state and EXACT redirect_uri to cookies
-	resp.set_cookie("oauth_state", state, httponly=True, secure=True, samesite="lax", max_age=300)
-	resp.set_cookie("oauth_redirect_uri", actual_redirect_uri, httponly=True, secure=True, samesite="lax", max_age=300)
+	resp.set_cookie("oauth_state", state, httponly=True, secure=True, samesite="none", max_age=300)
+	resp.set_cookie("oauth_redirect_uri", actual_redirect_uri, httponly=True, secure=True, samesite="none", max_age=300)
+
+	if code_verifier:
+		resp.set_cookie("oauth_verifier", code_verifier, httponly=True, secure=True, samesite="none", max_age=300)
 
 	return resp
 
@@ -119,8 +128,8 @@ async def github_callback(
 		)
 	
 	# Cleanup cookies
-	resp.delete_cookie("oauth_state", httponly=True, secure=True, samesite="lax")
-	resp.delete_cookie("oauth_redirect_uri", httponly=True, secure=True, samesite="lax")
+	resp.delete_cookie("oauth_state", httponly=True, secure=True, samesite="none")
+	resp.delete_cookie("oauth_redirect_uri", httponly=True, secure=True, samesite="none")
 
 	return resp
 

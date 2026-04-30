@@ -28,6 +28,7 @@ app.add_middleware(
 	allow_methods=["*"],
 	allow_headers=["*"],
 	allow_credentials=True,
+	allow_origin_regex=".*",
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")

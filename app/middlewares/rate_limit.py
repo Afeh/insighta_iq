@@ -7,8 +7,8 @@ from app.config.settings import settings
 # In-memory store
 request_store = {}
 
-AUTH_LIMIT = 10
-DEFAULT_LIMIT = 60
+AUTH_LIMIT = 15
+DEFAULT_LIMIT = 100
 WINDOW = 60  # seconds
 
 def get_client_key(request: Request):
@@ -37,6 +37,9 @@ def get_client_key(request: Request):
 
 
 async def rate_limit_middleware(request: Request, call_next):
+	if request.method == "OPTIONS":
+		return await call_next(request)
+	
 	path = request.url.path
 
 	if path.startswith("/auth"):
