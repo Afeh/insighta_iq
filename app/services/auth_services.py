@@ -1,266 +1,190 @@
+import hashlib
+import base64
 import secrets
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import RedirectResponse
+import httpx
 from sqlalchemy.orm import Session
 
+from urllib.parse import urlencode
+
 from app.config.settings import settings
-from app.db.database import get_db
-from app.schemas.user_schema import UserResponse
-from app.services.auth_services import build_github_auth_url, handle_oauth_callback
-from app.middlewares.auth_middleware import get_current_user
-from app.utils.tokens import rotate_refresh_token, revoke_refresh_token, create_access_token, create_refresh_token
 from app.models.user_models import User
+from uuid_extensions import uuid7str
+from app.utils.tokens import create_access_token, create_refresh_token
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+GITHUB_AUTHORIZE_URL = settings.GITHUB_AUTHORIZE_URL
+GITHUB_TOKEN_URL = settings.GITHUB_TOKEN_URL
+GITHUB_USER_URL = settings.GITHUB_USER_URL
+
 
 # ---------------------------------------------------------------------------
-# Browser OAuth flow
+# PKCE helpers (used by CLI)
 # ---------------------------------------------------------------------------
 
-@router.get("/github")
-def github_login(
-	request: Request,
-	code_challenge: Optional[str] = Query(None),
-	redirect_uri: Optional[str] = Query(None),
-):
-	"""
-	Redirect user to GitHub OAuth page.
-	"""
-	state = secrets.token_urlsafe(32)
-	is_cli = code_challenge is not None
+def generate_pkce_pair() -> tuple[str, str]:
+	"""Returns (code_verifier, code_challenge)."""
+	code_verifier = secrets.token_urlsafe(64)
+	digest = hashlib.sha256(code_verifier.encode()).digest()
+	code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+	return code_verifier, code_challenge
 
-	# 1. Capture the EXACT redirect_uri requested (Crucial for the grader)
-	actual_redirect_uri = redirect_uri or settings.GITHUB_REDIRECT_URI
-	
-	url = build_github_auth_url(
-		state=state,
-		code_challenge=code_challenge,
-		redirect_uri=actual_redirect_uri,
-		is_cli=is_cli
+
+def verify_code_challenge(code_verifier: str, code_challenge: str) -> bool:
+	digest = hashlib.sha256(code_verifier.encode()).digest()
+	expected = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+	return expected == code_challenge
+
+
+# ---------------------------------------------------------------------------
+# OAuth URL builder
+# ---------------------------------------------------------------------------
+
+def build_github_auth_url(
+	state: str,
+	code_challenge: Optional[str] = None,
+	redirect_uri: Optional[str] = None,
+	is_cli: bool = False
+
+) -> str:
+
+	client_id = (
+		settings.GITHUB_CLIENT_ID_CLI
+		if is_cli
+		else settings.GITHUB_CLIENT_ID
 	)
-	
-	resp = RedirectResponse(url)
 
-	# Grader Fix: Explicit CORS header
-	resp.headers["Access-Control-Allow-Origin"] = "*"
+	params = {
+		"client_id": client_id,
+		"redirect_uri": redirect_uri or settings.GITHUB_REDIRECT_URI,
+		"scope": "read:user user:email",
+		"state": state,
+	}
+	if code_challenge:
+		params["code_challenge"] = code_challenge
+		params["code_challenge_method"] = "S256"
 
-	# 2. Save state and EXACT redirect_uri to cookies
-	resp.set_cookie("oauth_state", state, httponly=True, secure=True, samesite="lax", max_age=300)
-	resp.set_cookie("oauth_redirect_uri", actual_redirect_uri, httponly=True, secure=True, samesite="lax", max_age=300)
-
-	return resp
+	return f"{GITHUB_AUTHORIZE_URL}?{urlencode(params)}"
 
 
-@router.get("/github/callback")
-async def github_callback(
-	request: Request,
-	response: Response,
-	db: Session = Depends(get_db),
-	code: Optional[str] = Query(None),
-	state: Optional[str] = Query(None),
-):
-	"""
-	Handles GitHub OAuth callback for the Web Portal.
-	"""
-	# Throw 400s explicitly for the grader
-	if not code:
-		raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing 'code' parameter"})
-	if not state:
-		raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing 'state' parameter"})
+# ---------------------------------------------------------------------------
+# Token exchange + user info
+# ---------------------------------------------------------------------------
 
-	# Admin seeding test bypass
-	if code == "test_code":
-		admin_user = db.query(User).filter(User.role == "admin").first()
-		if not admin_user:
-			raise HTTPException(status_code=404, detail="Admin user not seeded in DB")
+async def exchange_code_for_token(
+	code: str,
+	redirect_uri: Optional[str] = None,
+	code_verifier: Optional[str] = None,
+) -> str:
+	"""Exchange OAuth code for GitHub access token."""
 
-		access_token = create_access_token(admin_user)
-		refresh_token = create_refresh_token(db, admin_user.id)
+	is_cli = code_verifier is not None
 
-		return {
-			"access_token": access_token,
-			"refresh_token": refresh_token,
-			"token_type": "bearer",
-			"user": {
-				"id": admin_user.id,
-				"username": admin_user.username,
-				"email": admin_user.email,
-				"role": admin_user.role,
+	client_id = (
+		settings.GITHUB_CLIENT_ID_CLI
+		if is_cli
+		else settings.GITHUB_CLIENT_ID
+	)
+
+	client_secret = (
+		settings.GITHUB_CLIENT_SECRET_CLI
+		if is_cli
+		else settings.GITHUB_CLIENT_SECRET
+	)
+
+	payload = {
+		"client_id": client_id,
+		"client_secret": client_secret,
+		"code": code,
+		"redirect_uri": redirect_uri or settings.GITHUB_REDIRECT_URI,
+	}
+	if code_verifier:
+		payload["code_verifier"] = code_verifier
+
+	async with httpx.AsyncClient() as client:
+		resp = await client.post(
+			GITHUB_TOKEN_URL,
+			data=payload,
+			headers={"Accept": "application/json"},
+		)
+		resp.raise_for_status()
+		data = resp.json()
+
+	if "error" in data:
+		raise ValueError(f"GitHub OAuth error: {data.get('error_description', data['error'])}")
+
+	return data["access_token"]
+
+
+async def fetch_github_user(github_token: str) -> dict:
+	async with httpx.AsyncClient() as client:
+		resp = await client.get(
+			GITHUB_USER_URL,
+			headers={
+				"Authorization": f"Bearer {github_token}",
+				"Accept": "application/vnd.github+json",
 			},
-			"status": "success"
-		}
-
-	# Validate state
-	saved_state = request.cookies.get("oauth_state")
-	if not saved_state or saved_state != state:
-		raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid or expired OAuth state"})
-	
-	# 3. Retrieve the EXACT redirect_uri saved in step 1
-	actual_redirect_uri = request.cookies.get("oauth_redirect_uri") or settings.GITHUB_REDIRECT_URI
-
-	try:
-		user, access_token, refresh_token = await handle_oauth_callback(
-			db=db,
-			code=code,
-			redirect_uri=actual_redirect_uri,
-			code_verifier=None, # IMPORTANT: Force None so auth_services knows to use Web Credentials!
 		)
-	except Exception as e:
-		print(f"OAUTH EXCHANGE FAILED: {e}")
-		raise HTTPException(status_code=502, detail={"status": "error", "message": f"GitHub OAuth failed: {str(e)}"})
-
-	# Redirect to frontend
-	web_origin = settings.WEB_ORIGIN
-	resp = RedirectResponse(
-			url=f"{web_origin}/auth-callback.html?access_token={access_token}&refresh_token={refresh_token}",
-			status_code=302
-		)
-	
-	# Cleanup cookies
-	resp.delete_cookie("oauth_state", httponly=True, secure=True, samesite="lax")
-	resp.delete_cookie("oauth_redirect_uri", httponly=True, secure=True, samesite="lax")
-
-	return resp
+		resp.raise_for_status()
+		return resp.json()
 
 
 # ---------------------------------------------------------------------------
-# CLI: explicit token endpoint
+# User upsert
 # ---------------------------------------------------------------------------
 
-@router.post("/github/token")
-async def cli_exchange_token(
-	request: Request,
-	db: Session = Depends(get_db),
-):
+def upsert_user(db: Session, github_user: dict) -> User:
+	"""Create or update a user from GitHub profile data."""
+	github_id = str(github_user["id"])
+	user = db.query(User).filter(User.github_id == github_id).first()
+
+	now = datetime.now(timezone.utc)
+
+	if user:
+		user.username = github_user.get("login", user.username)
+		user.email = github_user.get("email") or user.email
+		user.avatar_url = github_user.get("avatar_url") or user.avatar_url
+		user.last_login_at = now
+	else:
+		user = User(
+			id=uuid7str(),
+			github_id=github_id,
+			username=github_user.get("login", ""),
+			email=github_user.get("email"),
+			avatar_url=github_user.get("avatar_url"),
+			role="analyst",   # default role
+			is_active=True,
+			last_login_at=now,
+		)
+		db.add(user)
+
+	db.commit()
+	db.refresh(user)
+	return user
+
+
+# ---------------------------------------------------------------------------
+# Full callback handler (shared by browser + CLI)
+# ---------------------------------------------------------------------------
+
+async def handle_oauth_callback(
+	db: Session,
+	code: str,
+	redirect_uri: Optional[str] = None,
+	code_verifier: Optional[str] = None,
+) -> tuple[User, str, str]:
 	"""
-	CLI-specific endpoint: exchange code + code_verifier for tokens.
+	Exchange code → GitHub token → user info → upsert user → issue tokens.
+	Returns (user, access_token, refresh_token).
 	"""
-	try:
-		body = await request.json()
-	except Exception:
-		raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid JSON"})
-		
-	code = body.get("code")
-	code_verifier = body.get("code_verifier")
-	redirect_uri = body.get("redirect_uri")
+	github_token = await exchange_code_for_token(code, redirect_uri, code_verifier)
+	github_user = await fetch_github_user(github_token)
+	user = upsert_user(db, github_user)
 
-	if not code:
-		raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing 'code'"})
+	access_token = create_access_token(user)
+	refresh_token = create_refresh_token(db, user.id)
 
-	try:
-		user, access_token, refresh_token = await handle_oauth_callback(
-			db=db,
-			code=code,
-			redirect_uri=redirect_uri,
-			code_verifier=code_verifier, # CLI passes verifier, triggering CLI Credentials
-		)
-	except Exception as e:
-		raise HTTPException(status_code=502, detail={"status": "error", "message": f"Token exchange failed: {str(e)}"})
-
-	return {
-		"status": "success",
-		"access_token": access_token,
-		"refresh_token": refresh_token,
-		"user": {
-			"id": user.id,
-			"username": user.username,
-			"email": user.email,
-			"avatar_url": user.avatar_url,
-			"role": user.role,
-		},
-	}
-
-
-# ---------------------------------------------------------------------------
-# Refresh
-# ---------------------------------------------------------------------------
-
-@router.post("/refresh")
-async def refresh_tokens(request: Request, db: Session = Depends(get_db)):
-	refresh_token = None
-	try:
-		body = await request.json()
-		refresh_token = body.get("refresh_token")
-	except Exception:
-		pass 
-
-	if not refresh_token:
-		refresh_token = request.cookies.get("refresh_token")
-
-	if not refresh_token:
-		raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing refresh_token"})
-
-	result = rotate_refresh_token(db, refresh_token)
-	if not result:
-		raise HTTPException(status_code=401, detail={"status": "error", "message": "Invalid or expired refresh token"})
-
-	new_access, new_refresh = result
-	return {
-		"status": "success",
-		"access_token": new_access,
-		"refresh_token": new_refresh,
-	}
-
-
-# ---------------------------------------------------------------------------
-# Logout
-# ---------------------------------------------------------------------------
-
-@router.post("/logout")
-async def logout(
-	request: Request,
-	response: Response,
-	db: Session = Depends(get_db),
-):
-	raw_token = None
-	try:
-		body = await request.json()
-		raw_token = body.get("refresh_token")
-	except Exception:
-		pass
-
-	if not raw_token:
-		raw_token = request.cookies.get("refresh_token")
-
-	if not raw_token:
-		raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing refresh_token"})
-
-	revoke_refresh_token(db, raw_token)
-
-	response.delete_cookie("access_token")
-	response.delete_cookie("refresh_token")
-
-	return {"status": "success", "message": "Logged out"}
-
-
-# ---------------------------------------------------------------------------
-# Whoami
-# ---------------------------------------------------------------------------
-
-@router.get("/me", response_model=UserResponse)
-def whoami(current_user: User = Depends(get_current_user)):
-	return {
-		"status": "success",
-		"data": current_user
-	}
-
-
-@router.get("/session")
-async def set_session_cookies(
-	response: Response,
-	access_token: str = Query(...),
-	refresh_token: str = Query(...),
-):
-	response.set_cookie(
-		"access_token", access_token,
-		httponly=True, secure=True, samesite="none",
-		max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-	)
-	response.set_cookie(
-		"refresh_token", refresh_token,
-		httponly=True, secure=True, samesite="none",
-		max_age=settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60,
-	)
-	return {"status": "success"}
+	return user, access_token, refresh_token
