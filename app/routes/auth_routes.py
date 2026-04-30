@@ -32,50 +32,52 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # ---------------------------------------------------------------------------
 @router.get("/github")
 def github_login(
-    request: Request,
-    code_challenge: Optional[str] = Query(None),
-    redirect_uri: Optional[str] = Query(None),
+	request: Request,
+	code_challenge: Optional[str] = Query(None),
+	redirect_uri: Optional[str] = Query(None),
 ):
-    """
-    Redirect user to GitHub OAuth page.
-    Generates PKCE for Web Flow automatically and stores verifier in cookie.
-    """
-    state = secrets.token_urlsafe(32)
-    is_cli = code_challenge is not None
+	"""
+	Redirect user to GitHub OAuth page.
+	Generates PKCE for Web Flow automatically and stores verifier in cookie.
+	"""
+	state = secrets.token_urlsafe(32)
+	is_cli = code_challenge is not None
 
-    code_verifier = None
-    if not is_cli:
-        # Generate PKCE specifically for the web flow
-        code_verifier, code_challenge = generate_pkce_pair()
-    
-    url = build_github_auth_url(
-        state=state,
-        code_challenge=code_challenge,
-        redirect_uri=redirect_uri or settings.GITHUB_REDIRECT_URI,
-        is_cli=is_cli
-    )
-    
-    resp = RedirectResponse(url)
+	code_verifier = None
+	if not is_cli:
+		# Generate PKCE specifically for the web flow
+		code_verifier, code_challenge = generate_pkce_pair()
+	
+	url = build_github_auth_url(
+		state=state,
+		code_challenge=code_challenge,
+		redirect_uri=redirect_uri or settings.GITHUB_REDIRECT_URI,
+		is_cli=is_cli
+	)
+	
+	resp = RedirectResponse(url)
 
-    # Grader Fix: Explicit CORS header
-    resp.headers["Access-Control-Allow-Origin"] = "*"
+	# Grader Fix: Explicit CORS header
+	resp.headers["Access-Control-Allow-Origin"] = "*"
 
-    # Save state to validate later
-    resp.set_cookie("oauth_state", state, httponly=True, secure=True, samesite="lax", max_age=300)
-    
-    # Save the verifier ONLY for web flow so we can use it in the callback
-    if code_verifier:
-        resp.set_cookie("oauth_verifier", code_verifier, httponly=True, secure=True, samesite="lax", max_age=300)
+	# Save state to validate later
+	resp.set_cookie("oauth_state", state, httponly=True, secure=True, samesite="lax", max_age=300)
 
-    return resp
+	resp.set_cookie("oauth_redirect_uri", redirect_uri, httponly=True, secure=True, samesite="lax", max_age=300)
+	
+	# Save the verifier ONLY for web flow so we can use it in the callback
+	if code_verifier:
+		resp.set_cookie("oauth_verifier", code_verifier, httponly=True, secure=True, samesite="lax", max_age=300)
+
+	return resp
 
 
 @router.get("/github/callback")
 async def github_callback(
 	request: Request,
 	response: Response,
-	code: str = Query(...),
-	state: str = Query(...),
+	code: Optional[str] = Query(None),
+	state: Optional[str] = Query(None),
 	db: Session = Depends(get_db),
 	code_verifier: Optional[str] = Query(None),
 ):
