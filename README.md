@@ -190,6 +190,49 @@ Indexes on: `gender`, `age_group`, `country_id`, `age`, `created_at`.
 `Access-Control-Allow-Origin: *` is set globally.
  
 ---
+
+
+## Authentication Flow
+
+This project uses GitHub OAuth 2.0 with PKCE for authentication.
+
+1. User visits `/auth/github` — backend generates a state token and PKCE 
+   code_challenge, stores state in a secure HTTP-only cookie, and redirects 
+   to GitHub's authorization page.
+2. GitHub redirects back to `/auth/github/callback` with a one-time `code` 
+   and the original `state`.
+3. Backend validates the state, exchanges the code for a GitHub access token 
+   (server-to-server), fetches the user's GitHub profile, and upserts the 
+   user in the database.
+4. Backend issues a short-lived JWT access token and a long-lived refresh 
+   token. The frontend receives these and stores them as HTTP-only cookies 
+   via the `/auth/session` endpoint.
+5. All subsequent API requests are authenticated via the access token cookie 
+   or Bearer header. The `/auth/refresh` endpoint rotates tokens when the 
+   access token expires.
+
+## Role Enforcement
+
+Two roles exist: `admin` and `analyst`.
+
+- **analyst** — default role assigned on first login. Can read profiles and 
+  access `/api/profiles` and `/api/users/me`.
+- **admin** — elevated role manually assigned in the database. Can access 
+  all endpoints including user management.
+
+Role is encoded in the JWT payload and enforced per-route via FastAPI 
+dependencies (`require_admin`, `require_analyst_or_admin`).
+
+## Interfaces
+
+**Web Portal** — A browser-based dashboard deployed on Leapcell. Uses 
+HTTP-only cookie authentication. Login is initiated by visiting 
+`/auth/github` on the backend, which handles the full OAuth redirect flow.
+
+**CLI** — A command-line tool that uses PKCE for secure OAuth without a 
+client secret. The CLI generates a `code_verifier`/`code_challenge` pair, 
+opens the browser for GitHub auth, captures the callback locally, and 
+exchanges the code via `/auth/github/token` for JWT tokens stored locally.
  
 ## Timestamps
  
