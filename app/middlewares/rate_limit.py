@@ -25,7 +25,7 @@ def get_client_key(request: Request):
 		token = auth_header.split(" ")[1]
 		try:
 
-			payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+			payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
 			user_id = payload.get("sub")
 			if user_id:
 				return user_id
