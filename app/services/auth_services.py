@@ -39,10 +39,6 @@ def verify_code_challenge(code_verifier: str, code_challenge: str) -> bool:
 	return expected == code_challenge
 
 
-# ---------------------------------------------------------------------------
-# OAuth URL builder
-# ---------------------------------------------------------------------------
-
 def build_github_auth_url(
 	state: str,
 	code_challenge: Optional[str] = None,

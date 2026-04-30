@@ -15,9 +15,6 @@ from app.models.user_models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# ---------------------------------------------------------------------------
-# Browser OAuth flow
-# ---------------------------------------------------------------------------
 
 @router.get("/github")
 def github_login(
@@ -31,7 +28,6 @@ def github_login(
 	state = secrets.token_urlsafe(32)
 	is_cli = code_challenge is not None
 
-	# 1. Capture the EXACT redirect_uri requested (Crucial for the grader)
 	actual_redirect_uri = redirect_uri or settings.GITHUB_REDIRECT_URI
 	code_verifier = None
 
@@ -49,10 +45,9 @@ def github_login(
 	
 	resp = RedirectResponse(url)
 
-	# Grader Fix: Explicit CORS header
+	
 	resp.headers["Access-Control-Allow-Origin"] = "*"
 
-	# 2. Save state and EXACT redirect_uri to cookies
 	resp.set_cookie("oauth_state", state, httponly=True, secure=True, samesite="none", max_age=300)
 	resp.set_cookie("oauth_redirect_uri", actual_redirect_uri, httponly=True, secure=True, samesite="none", max_age=300)
 
@@ -73,7 +68,6 @@ async def github_callback(
 	"""
 	Handles GitHub OAuth callback for the Web Portal.
 	"""
-	# Throw 400s explicitly for the grader
 	if not code:
 		raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing 'code' parameter"})
 	if not state:
@@ -106,7 +100,6 @@ async def github_callback(
 	if not saved_state or saved_state != state:
 		raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid or expired OAuth state"})
 	
-	# 3. Retrieve the EXACT redirect_uri saved in step 1
 	actual_redirect_uri = request.cookies.get("oauth_redirect_uri") or settings.GITHUB_REDIRECT_URI
 
 	code_verifier = request.cookies.get("oauth_verifier")
@@ -136,10 +129,6 @@ async def github_callback(
 
 	return resp
 
-
-# ---------------------------------------------------------------------------
-# CLI: explicit token endpoint
-# ---------------------------------------------------------------------------
 
 @router.post("/github/token")
 async def cli_exchange_token(
@@ -187,10 +176,6 @@ async def cli_exchange_token(
 	}
 
 
-# ---------------------------------------------------------------------------
-# Refresh
-# ---------------------------------------------------------------------------
-
 @router.post("/refresh")
 async def refresh_tokens(request: Request, db: Session = Depends(get_db)):
 	refresh_token = None
@@ -218,10 +203,6 @@ async def refresh_tokens(request: Request, db: Session = Depends(get_db)):
 	}
 
 
-# ---------------------------------------------------------------------------
-# Logout
-# ---------------------------------------------------------------------------
-
 @router.post("/logout")
 async def logout(
 	request: Request,
@@ -243,8 +224,9 @@ async def logout(
 
 	revoke_refresh_token(db, raw_token)
 
-	response.delete_cookie("access_token")
-	response.delete_cookie("refresh_token")
+	# 2. MATCH THE FLAGS EXACTLY TO FORCE BROWSER DELETION
+	response.delete_cookie("access_token", httponly=True, secure=True, samesite="none")
+	response.delete_cookie("refresh_token", httponly=True, secure=True, samesite="none")
 
 	return {"status": "success", "message": "Logged out"}
 
