@@ -114,7 +114,8 @@ async def github_callback(
 			db=db,
 			code=code,
 			redirect_uri=actual_redirect_uri,
-			code_verifier=None, # IMPORTANT: Force None so auth_services knows to use Web Credentials!
+			code_verifier=None,
+			is_cli=False
 		)
 	except Exception as e:
 		print(f"OAUTH EXCHANGE FAILED: {e}")
@@ -163,9 +164,11 @@ async def cli_exchange_token(
 			db=db,
 			code=code,
 			redirect_uri=redirect_uri,
-			code_verifier=code_verifier, # CLI passes verifier, triggering CLI Credentials
+			code_verifier=code_verifier,
+			is_cli=True
 		)
 	except Exception as e:
+		print(f"OAUTH EXCHANGE FAILED: {e}")
 		raise HTTPException(status_code=502, detail={"status": "error", "message": f"Token exchange failed: {str(e)}"})
 
 	return {

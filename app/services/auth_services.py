@@ -78,22 +78,13 @@ async def exchange_code_for_token(
 	code: str,
 	redirect_uri: Optional[str] = None,
 	code_verifier: Optional[str] = None,
+	is_cli: bool = False  # <--- ADD THIS EXPLICIT FLAG
 ) -> str:
 	"""Exchange OAuth code for GitHub access token."""
 
-	is_cli = code_verifier is not None
-
-	client_id = (
-		settings.GITHUB_CLIENT_ID_CLI
-		if is_cli
-		else settings.GITHUB_CLIENT_ID
-	)
-
-	client_secret = (
-		settings.GITHUB_CLIENT_SECRET_CLI
-		if is_cli
-		else settings.GITHUB_CLIENT_SECRET
-	)
+	# Explicitly pick the correct credentials
+	client_id = settings.GITHUB_CLIENT_ID_CLI if is_cli else settings.GITHUB_CLIENT_ID
+	client_secret = settings.GITHUB_CLIENT_SECRET_CLI if is_cli else settings.GITHUB_CLIENT_SECRET
 
 	payload = {
 		"client_id": client_id,
@@ -101,6 +92,7 @@ async def exchange_code_for_token(
 		"code": code,
 		"redirect_uri": redirect_uri or settings.GITHUB_REDIRECT_URI,
 	}
+	
 	if code_verifier:
 		payload["code_verifier"] = code_verifier
 
@@ -110,7 +102,7 @@ async def exchange_code_for_token(
 			data=payload,
 			headers={"Accept": "application/json"},
 		)
-		resp.raise_for_status()
+		# We removed raise_for_status() so we can parse GitHub's JSON safely
 		data = resp.json()
 
 	if "error" in data:
@@ -175,12 +167,13 @@ async def handle_oauth_callback(
 	code: str,
 	redirect_uri: Optional[str] = None,
 	code_verifier: Optional[str] = None,
+	is_cli: bool = False  # <--- ADD THIS EXPLICIT FLAG
 ) -> tuple[User, str, str]:
 	"""
 	Exchange code → GitHub token → user info → upsert user → issue tokens.
-	Returns (user, access_token, refresh_token).
 	"""
-	github_token = await exchange_code_for_token(code, redirect_uri, code_verifier)
+	# Pass the flag down
+	github_token = await exchange_code_for_token(code, redirect_uri, code_verifier, is_cli)
 	github_user = await fetch_github_user(github_token)
 	user = upsert_user(db, github_user)
 
