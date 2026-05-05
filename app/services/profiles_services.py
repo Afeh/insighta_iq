@@ -10,6 +10,11 @@ from app.models.profile_models import Profile
 from app.config.settings import settings
 from app.utils.round_up import round_up
 from app.services.nlp_parser import parse_natural_query, ParsedQuery, COUNTRY_MAP
+from app.services.cache_service import get_cache, QUERY_CACHE_PREFIX
+from app.services.query_normalizer import (
+	normalize_filter_params,
+	normalize_parsed_query
+)
 
 REVERSE_COUNTRY_MAP = {code: name.title() for name, code in COUNTRY_MAP.items()}
 
@@ -18,12 +23,30 @@ VALID_ORDERS = {"asc", "desc"}
 VALID_AGE_GROUPS = {"child", "teenager", "adult", "senior"}
 VALID_GENDERS = {"male", "female"}
 
+QUERY_CACHE_TTL = 300  # 5 minutes
+
 
 class QueryValidationError(Exception):
 	def __init__(self, message: str, status_code: int = 400):
 		self.message = message
 		self.status_code = status_code
 		super().__init__(message)
+
+
+def _profile_to_dict(profile: Profile) -> dict:
+	"""Convert SQLAlchemy Profile model to dict"""
+	return {
+		"id": profile.id,
+		"name": profile.name,
+		"gender": profile.gender,
+		"gender_probability": profile.gender_probability,
+		"age": profile.age,
+		"age_group": profile.age_group,
+		"country_id": profile.country_id,
+		"country_name": profile.country_name,
+		"country_probability": profile.country_probability,
+		"created_at": profile.created_at.isoformat() if profile.created_at else None,
+	}
 
 
 def _apply_filter(
@@ -107,12 +130,49 @@ def get_profiles(
 	page: int = 1,
 	limit: int = 10,
 ):
+	# Normalize parameters to canonical form
+	normalized = normalize_filter_params(
+		gender=gender,
+		age_group=age_group,
+		country_id=country_id,
+		min_age=min_age,
+		max_age=max_age,
+		min_gender_probability=min_gender_probability,
+		min_country_probability=min_country_probability,
+		sort_by=sort_by,
+		order=order,
+		page=page,
+		limit=limit
+	)
+	
+	# Generate cache key from normalized parameters
+	cache_key = normalized.to_cache_key("")
+	
+	# Check cache first
+	cache = get_cache()
+	cached_result = cache.get(cache_key)
+	if cached_result is not None:
+		return cached_result
+	
+	# Query database
 	query = db.query(Profile)
 	query = _apply_filter(
-		query, gender, age_group, country_id, min_age, max_age, min_gender_probability, min_country_probability
+		query, 
+		gender=normalized.gender,
+		age_group=normalized.age_group,
+		country_id=normalized.country_id,
+		min_age=normalized.min_age,
+		max_age=normalized.max_age,
+		min_gender_probability=normalized.min_gender_probability,
+		min_country_probability=normalized.min_country_probability
 	)
-	query = _apply_sorting(query, sort_by, order)
-	total, results = _apply_pagination(query, page, limit)
+	query = _apply_sorting(query, normalized.sort_by, normalized.order)
+	total, results = _apply_pagination(query, normalized.page, normalized.limit)
+	
+	# Cache the result (convert to dict format for JSON serialization)
+	cached_result = (total, [_profile_to_dict(r) for r in results])
+	cache.set(cache_key, cached_result, ttl=QUERY_CACHE_TTL)
+	
 	return total, results
 
 
@@ -122,24 +182,45 @@ def search_profiles_nlp(
 	page: int = 1,
 	limit: int = 10
 ):
+	# Normalize the NLP parsed query
 	parsed = parse_natural_query(q)
 
 	if not parsed.valid:
 		return None
 	
+	# Normalize to canonical form for caching
+	normalized = normalize_parsed_query(parsed)
+	normalized.page = page
+	normalized.limit = limit
+	
+	# Generate cache key
+	cache_key = normalized.to_cache_key()
+	
+	# Check cache
+	cache = get_cache()
+	cached_result = cache.get(cache_key)
+	if cached_result is not None:
+		return cached_result
+	
+	# Query database
 	query = db.query(Profile)
 
-	gender_filter = None if parsed.both_genders else parsed.gender
+	gender_filter = None if normalized.both_genders else normalized.gender
 	query = _apply_filter(
 		query,
 		gender=gender_filter,
-		age_group=parsed.age_group,
-		country_id=parsed.country_id,
-		min_age=parsed.min_age,
-		max_age=parsed.max_age
+		age_group=normalized.age_group,
+		country_id=normalized.country_id,
+		min_age=normalized.min_age,
+		max_age=normalized.max_age
 	)
 	query = query.order_by(asc(Profile.created_at))
-	total, results = _apply_pagination(query, page, limit)
+	total, results = _apply_pagination(query, normalized.page, normalized.limit)
+	
+	# Cache the result (convert to dict format for JSON serialization)
+	cached_result = (total, [_profile_to_dict(r) for r in results])
+	cache.set(cache_key, cached_result, ttl=QUERY_CACHE_TTL)
+	
 	return total, results
 
 
