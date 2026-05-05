@@ -2,7 +2,7 @@ import csv
 from datetime import datetime
 import io
 import math
-from fastapi import APIRouter, Depends, Query, HTTPException, Request
+from fastapi import APIRouter, Depends, Query, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -10,6 +10,7 @@ from typing import Optional
 from app.db.database import get_db
 from app.schemas.profile_schema import PaginatedProfilesResponse, ProfileOut, ErrorResponse, CreateProfileRequest
 from app.services.profiles_services import get_profiles, search_profiles_nlp, create_profile_from_external_apis, get_profile_by_id , QueryValidationError
+from app.services.csv_ingestion import ingest_csv_file, validate_csv_structure, CSVIngestionError
 from app.middlewares.auth_middleware import require_admin, require_analyst_or_admin
 from app.middlewares.versioning import require_api_version
 
@@ -250,3 +251,73 @@ async def get_profile_id(
 			"created_at": profile.created_at.isoformat() if profile.created_at else None
 		}
 	}
+
+
+@router.post("/upload/csv")
+async def upload_csv(
+	file: UploadFile = File(...),
+	db: Session = Depends(get_db),
+	user=Depends(require_admin)
+):
+	"""
+	Admin Only: Upload a CSV file with profile data for bulk ingestion.
+	
+	CSV Format:
+	- Required columns: name, gender, age, country_id, age_group
+	- Optional columns: gender_probability, country_probability, country_name
+	
+	Returns:
+	{
+		"status": "success",
+		"total_rows": 50000,
+		"inserted": 48231,
+		"skipped": 1769,
+		"reasons": {
+			"duplicate_name": 1203,
+			"invalid_age": 312,
+			"missing_fields": 254
+		}
+	}
+	"""
+	if not file.filename:
+		raise HTTPException(
+			status_code=400,
+			detail={"status": "error", "message": "No file provided"}
+		)
+	
+	# Validate file extension
+	if not file.filename.lower().endswith('.csv'):
+		raise HTTPException(
+			status_code=400,
+			detail={"status": "error", "message": "File must be a CSV file"}
+		)
+	
+	try:
+		# Read entire file into memory for processing
+		file_content = await file.read()
+		
+		# Validate CSV structure first
+		is_valid, validation_error = await validate_csv_structure(file_content)
+		if not is_valid:
+			raise HTTPException(
+				status_code=400,
+				detail={"status": "error", "message": validation_error}
+			)
+		
+		# Ingest the CSV
+		result = await ingest_csv_file(db, file_content, file.filename)
+		
+		return result
+		
+	except CSVIngestionError as e:
+		raise HTTPException(
+			status_code=400,
+			detail={"status": "error", "message": str(e)}
+		)
+	except HTTPException:
+		raise
+	except Exception as e:
+		raise HTTPException(
+			status_code=500,
+			detail={"status": "error", "message": f"Error processing file: {str(e)}"}
+		)
